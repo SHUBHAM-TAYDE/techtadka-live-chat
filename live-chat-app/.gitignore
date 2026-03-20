@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+client/dist/
+
+# Environment files — NEVER commit these
+.env
+.env.local
+.env.production
+.env.staging
+
+# Logs
+*.log
+npm-debug.log*
+pm2-*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Docker override files
+docker-compose.override.yml
+
+# SSL certificates — never commit
+*.pem
+*.key
+*.crt

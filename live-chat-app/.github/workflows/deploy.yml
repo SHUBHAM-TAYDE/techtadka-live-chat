@@ -1,0 +1,206 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CI/CD Pipeline — Live Chat App
+# Tech Tadka With Shubham — Utho Cloud Deployment
+#
+# Triggers:
+#   push to main   → full CI + deploy to production
+#   pull_request   → CI only (no deploy)
+#
+# Required GitHub Secrets:
+#   UTHO_VM1_HOST        Private IP of app server 1
+#   UTHO_VM2_HOST        Private IP of app server 2
+#   UTHO_VM3_HOST        Private IP of app server 3
+#   UTHO_SSH_USER        SSH username (e.g. ubuntu)
+#   UTHO_SSH_KEY         Private SSH key (PEM format)
+#   UTHO_BASTION_HOST    (Optional) Bastion/jump host IP if VMs are private
+#   SLACK_WEBHOOK_URL    (Optional) Slack notification webhook
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: CI / CD → Utho Cloud
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '20'
+
+# Only one deployment at a time
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 1 — Lint & Build (runs on every push + PR)
+  # ───────────────────────────────────────────────────────────────────────────
+  ci:
+    name: 🔍 Lint & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+
+      # ── Backend ──────────────────────────────────────────────────────────
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Validate server entry point loads
+        working-directory: server
+        run: node --check index.js
+        env:
+          NODE_ENV: test
+
+      # ── Frontend ─────────────────────────────────────────────────────────
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Build React app
+        working-directory: client
+        run: npm run build
+        env:
+          VITE_API_URL: ''
+          VITE_SOCKET_URL: ''
+
+      - name: Upload frontend build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: client/dist/
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 2 — Deploy to Utho Cloud (only on push to main)
+  # ───────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: 🚀 Deploy to Utho Cloud
+    runs-on: ubuntu-latest
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    strategy:
+      max-parallel: 1           # Rolling deploy — one VM at a time
+      matrix:
+        include:
+          - vm: VM1
+            host_secret: UTHO_VM1_HOST
+          - vm: VM2
+            host_secret: UTHO_VM2_HOST
+          - vm: VM3
+            host_secret: UTHO_VM3_HOST
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: client/dist/
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.UTHO_SSH_KEY }}
+
+      - name: Add VM to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets[matrix.host_secret] }} >> ~/.ssh/known_hosts
+
+      # ── Step 1: Upload frontend build ─────────────────────────────────────
+      - name: Upload frontend dist to ${{ matrix.vm }}
+        run: |
+          rsync -avz --delete \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            client/dist/ \
+            ${{ secrets.UTHO_SSH_USER }}@${{ secrets[matrix.host_secret] }}:/var/www/live-chat/dist/
+
+      # ── Step 2: Upload server code ────────────────────────────────────────
+      - name: Upload server code to ${{ matrix.vm }}
+        run: |
+          rsync -avz --delete \
+            --exclude='node_modules' \
+            --exclude='.env' \
+            --exclude='*.log' \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            server/ \
+            ${{ secrets.UTHO_SSH_USER }}@${{ secrets[matrix.host_secret] }}:/var/www/live-chat/server/
+
+      # ── Step 3: Install deps + reload (zero-downtime) ────────────────────
+      - name: Deploy on ${{ matrix.vm }}
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.UTHO_SSH_USER }}@${{ secrets[matrix.host_secret] }} << 'ENDSSH'
+            set -e
+            cd /var/www/live-chat/server
+
+            echo "→ Installing production dependencies..."
+            npm ci --only=production
+
+            echo "→ Reloading PM2 (zero-downtime)..."
+            pm2 reload live-chat-server --update-env || pm2 start ecosystem.config.js --env production
+
+            echo "→ Reloading Nginx..."
+            sudo nginx -t && sudo systemctl reload nginx
+
+            echo "→ Health check..."
+            sleep 3
+            curl -sf http://localhost:5000/health | grep -q '"status":"ok"'
+            echo "✅ $HOSTNAME is healthy"
+          ENDSSH
+
+      - name: Health check via Load Balancer
+        run: |
+          sleep 5
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://${{ secrets.UTHO_DOMAIN }}/health || echo "000")
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ Load balancer health check failed (HTTP $STATUS)"
+            exit 1
+          fi
+          echo "✅ Load balancer returned HTTP $STATUS"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 3 — Notify on completion
+  # ───────────────────────────────────────────────────────────────────────────
+  notify:
+    name: 📣 Notify
+    runs-on: ubuntu-latest
+    needs: [ci, deploy]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Send Slack notification
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "${{ needs.deploy.result == 'success' && '✅ Deployed to Utho Cloud' || '❌ Deploy failed' }} — Live Chat App",
+              "attachments": [{
+                "color": "${{ needs.deploy.result == 'success' && 'good' || 'danger' }}",
+                "fields": [
+                  { "title": "Commit", "value": "${{ github.event.head_commit.message }}", "short": false },
+                  { "title": "Author", "value": "${{ github.actor }}", "short": true },
+                  { "title": "Branch", "value": "${{ github.ref_name }}", "short": true }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

@@ -1,0 +1,184 @@
+version: '3.9'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.prod.yml
+# Mirrors the full Utho Cloud production setup locally:
+#   - 3 Node.js app instances behind Nginx load balancer
+#   - Redis for Socket.io pub/sub (shared across all instances)
+#   - PostgreSQL database
+#   - Nginx reverse proxy with sticky sessions
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up --build
+#   Then open: http://localhost
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  chat-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  frontend-dist:
+
+services:
+
+  # ─── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: chat_postgres
+    restart: unless-stopped
+    networks: [chat-net]
+    environment:
+      POSTGRES_DB:       livechat
+      POSTGRES_USER:     livechat_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-localdevpassword}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./server/models/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U livechat_user -d livechat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"   # Expose for local DB clients (remove in real prod)
+
+  # ─── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: chat_redis
+    restart: unless-stopped
+    networks: [chat-net]
+    command: redis-server --requirepass ${REDIS_PASSWORD:-localdevpassword} --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-localdevpassword}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Frontend builder ────────────────────────────────────────────────────────
+  frontend-build:
+    image: node:20-alpine
+    container_name: chat_frontend_build
+    working_dir: /app
+    volumes:
+      - ./client:/app
+      - frontend-dist:/app/dist
+    environment:
+      VITE_API_URL: ''
+      VITE_SOCKET_URL: ''
+    command: sh -c "npm ci && npm run build"
+    profiles: [build]   # Only run with: docker compose --profile build up
+
+  # ─── Node.js App Instance 1 ─────────────────────────────────────────────────
+  app1:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: chat_app1
+    restart: unless-stopped
+    networks: [chat-net]
+    env_file: ./server/.env
+    environment:
+      NODE_ENV:       production
+      PORT:           5000
+      DB_HOST:        postgres
+      DB_PORT:        5432
+      DB_NAME:        livechat
+      DB_USER:        livechat_user
+      DB_PASSWORD:    ${DB_PASSWORD:-localdevpassword}
+      DB_SSL:         "false"
+      REDIS_HOST:     redis
+      REDIS_PORT:     6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-localdevpassword}
+      INSTANCE_ID:    app1
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ─── Node.js App Instance 2 ─────────────────────────────────────────────────
+  app2:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: chat_app2
+    restart: unless-stopped
+    networks: [chat-net]
+    env_file: ./server/.env
+    environment:
+      NODE_ENV:       production
+      PORT:           5000
+      DB_HOST:        postgres
+      DB_PORT:        5432
+      DB_NAME:        livechat
+      DB_USER:        livechat_user
+      DB_PASSWORD:    ${DB_PASSWORD:-localdevpassword}
+      DB_SSL:         "false"
+      REDIS_HOST:     redis
+      REDIS_PORT:     6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-localdevpassword}
+      INSTANCE_ID:    app2
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ─── Node.js App Instance 3 ─────────────────────────────────────────────────
+  app3:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: chat_app3
+    restart: unless-stopped
+    networks: [chat-net]
+    env_file: ./server/.env
+    environment:
+      NODE_ENV:       production
+      PORT:           5000
+      DB_HOST:        postgres
+      DB_PORT:        5432
+      DB_NAME:        livechat
+      DB_USER:        livechat_user
+      DB_PASSWORD:    ${DB_PASSWORD:-localdevpassword}
+      DB_SSL:         "false"
+      REDIS_HOST:     redis
+      REDIS_PORT:     6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-localdevpassword}
+      INSTANCE_ID:    app3
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ─── Nginx Load Balancer ────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: chat_nginx
+    restart: unless-stopped
+    networks: [chat-net]
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/docker.conf:/etc/nginx/nginx.conf:ro
+      - frontend-dist:/usr/share/nginx/html:ro
+    depends_on:
+      app1: { condition: service_healthy }
+      app2: { condition: service_healthy }
+      app3: { condition: service_healthy }

@@ -1,0 +1,95 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Artillery Load Test — Live Chat App
+# Tech Tadka With Shubham — Episode 10: Load Testing on Utho Cloud
+#
+# Install: npm install -g artillery
+# Run:     artillery run load-test.yml --target https://yourdomain.com
+#
+# What this tests:
+#   Phase 1 — Warm-up:   10 users/sec for 30s  (300 total)
+#   Phase 2 — Ramp-up:   10→100 users/sec over 60s
+#   Phase 3 — Sustained: 100 users/sec for 60s  (6000 total)
+#   Phase 4 — Spike:     500 users/sec for 10s  (tests auto-scaling trigger)
+#   Phase 5 — Cool-down: back to 10 users/sec for 30s
+# ─────────────────────────────────────────────────────────────────────────────
+
+config:
+  target: "{{ $processEnvironment.TARGET_URL || 'http://localhost' }}"
+  http:
+    timeout: 10
+    pool: 50
+  phases:
+    - name: "Warm-up"
+      duration: 30
+      arrivalRate: 10
+
+    - name: "Ramp-up"
+      duration: 60
+      arrivalRate: 10
+      rampTo: 100
+
+    - name: "Sustained load"
+      duration: 60
+      arrivalRate: 100
+
+    - name: "Spike — triggers auto-scaling"
+      duration: 10
+      arrivalRate: 500
+
+    - name: "Cool-down"
+      duration: 30
+      arrivalRate: 10
+
+  variables:
+    testEmail:    "loadtest-{{ $randomNumber(1, 99999) }}@techtadka.test"
+    testPassword: "LoadTest@123"
+    testUsername: "user{{ $randomNumber(1, 99999) }}"
+
+  plugins:
+    metrics-by-endpoint: {}
+
+  ensure:
+    thresholds:
+      - http.response_time.p95: 1000   # p95 must be under 1 second
+      - http.response_time.p99: 3000   # p99 must be under 3 seconds
+
+scenarios:
+  # ── Scenario 1: Register + Login + Fetch rooms (70% of traffic) ────────────
+  - name: "Auth flow"
+    weight: 70
+    flow:
+      - post:
+          url: "/api/auth/register"
+          json:
+            username: "{{ testUsername }}"
+            email:    "{{ testEmail }}"
+            password: "{{ testPassword }}"
+          capture:
+            - json: "$.token"
+              as:   "authToken"
+          expect:
+            - statusCode: 201
+
+      - get:
+          url: "/api/rooms"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+
+      - get:
+          url: "/api/auth/me"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+
+  # ── Scenario 2: Health check (30% of traffic) ───────────────────────────────
+  - name: "Health probe"
+    weight: 30
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200
+            - contentType: json

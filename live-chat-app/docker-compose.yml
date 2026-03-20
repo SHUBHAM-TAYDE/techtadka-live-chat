@@ -1,0 +1,70 @@
+version: '3.9'
+
+services:
+
+  # ─── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: livechat_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       livechat
+      POSTGRES_USER:     livechat_user
+      POSTGRES_PASSWORD: localdevpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./server/models/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U livechat_user -d livechat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: livechat_redis
+    restart: unless-stopped
+    command: redis-server --requirepass localdevpassword
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "localdevpassword", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Node.js Server ─────────────────────────────────────────────────────────
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: livechat_server
+    restart: unless-stopped
+    env_file: ./server/.env
+    environment:
+      NODE_ENV:      development
+      DB_HOST:       postgres
+      DB_PORT:       5432
+      DB_NAME:       livechat
+      DB_USER:       livechat_user
+      DB_PASSWORD:   localdevpassword
+      DB_SSL:        "false"
+      REDIS_HOST:    redis
+      REDIS_PORT:    6379
+      REDIS_PASSWORD: localdevpassword
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data:

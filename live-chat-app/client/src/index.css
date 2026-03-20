@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body, #root {
+    height: 100%;
+    background-color: #0d0d0f;
+    color: #f0eff5;
+    font-family: 'DM Sans', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a2a32; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3a45; }
+
+  ::selection { background: rgba(124,109,250,0.3); color: #f0eff5; }
+}
+
+@layer components {
+  .input-base {
+    @apply w-full bg-panel border border-border rounded-xl px-4 py-3
+           text-ink-1 placeholder-ink-3 text-sm
+           focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30
+           transition-all duration-200;
+  }
+
+  .btn-primary {
+    @apply w-full bg-accent hover:bg-accent-hover text-white font-medium
+           px-4 py-3 rounded-xl text-sm
+           transition-all duration-200 active:scale-[0.98]
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply px-3 py-2 rounded-lg text-ink-2 hover:text-ink-1 hover:bg-muted/40
+           text-sm font-medium transition-all duration-150;
+  }
+
+  .room-pill {
+    @apply flex items-center gap-2.5 px-3 py-2.5 rounded-xl
+           text-sm font-medium cursor-pointer
+           transition-all duration-150 select-none;
+  }
+
+  .avatar {
+    @apply rounded-full flex items-center justify-center
+           font-semibold text-white uppercase flex-shrink-0;
+  }
+}
