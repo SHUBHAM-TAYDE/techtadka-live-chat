@@ -1,4 +1,15 @@
 # 💬 Live Chat App
+
+![Node.js](https://img.shields.io/badge/Node.js-20-green)
+![Socket.io](https://img.shields.io/badge/Socket.io-4.6-black)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue)
+![Redis](https://img.shields.io/badge/Redis-7-red)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+![YouTube](https://img.shields.io/badge/Tech_Tadka_With_Shubham-YouTube-red)
+
+> Full-stack real-time chat app deployed on Utho Cloud
+> with HA setup — Load Balancer + Auto Scaling + Managed DB
+
 ### Tech Tadka With Shubham — Utho Cloud Series
 
 A production-ready real-time chat application built with Node.js, Socket.io, PostgreSQL, and Redis. Designed to be deployed on Utho Cloud with a highly available, auto-scaling setup.
